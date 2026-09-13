@@ -1,0 +1,37 @@
+spring:
+  config:
+    activate:
+      on-profile: prod
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+  cache:
+    type: simple
+  mail:
+    host: ${MAIL_HOST}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME}
+    password: ${MAIL_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+logging:
+  level:
+    root: INFO
+    com.packersmovers.marketplace: INFO
+
+springdoc:
+  swagger-ui:
+    enabled: false
+
+app:
+  password-reset:
+    frontend-url: ${PASSWORD_RESET_FRONTEND_URL}
+    mail-from: ${PASSWORD_RESET_MAIL_FROM}
