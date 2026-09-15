@@ -20,18 +20,42 @@ public interface ProviderRepository extends JpaRepository<Provider, Long> {
     long countByStatusIn(List<ProviderStatus> statuses);
 
     /**
-     * Candidate pool for matching: approved, verified, active service area + category match.
-     * Wallet/subscription eligibility is applied in the MatchingService, since it needs live balance checks.
+     * Provider profile with all required relations loaded.
+     *
+     * Prevents LazyInitializationException when ProviderService
+     * reads User, ServiceArea and ServiceCategory information.
      */
     @Query("""
-           select distinct p from Provider p
+           select distinct p
+           from Provider p
+           left join fetch p.user
+           left join fetch p.serviceAreas
+           left join fetch p.serviceCategories
+           where p.user.id = :userId
+           """)
+    Optional<Provider> findByUserIdWithDetails(
+            @Param("userId") Long userId
+    );
+
+    /**
+     * Candidate pool for matching: approved, verified, active
+     * service area + category match.
+     *
+     * Wallet/subscription eligibility is applied in MatchingService.
+     */
+    @Query("""
+           select distinct p
+           from Provider p
            join p.serviceAreas sa
            join p.serviceCategories sc
-           where p.status = com.packersmovers.marketplace.common.enums.ProviderStatus.APPROVED
+           where p.status =
+                 com.packersmovers.marketplace.common.enums.ProviderStatus.APPROVED
              and sa.id = :serviceAreaId
              and sc.id = :serviceCategoryId
            order by p.priorityScore desc, p.rating desc
            """)
-    List<Provider> findEligibleProviders(@Param("serviceAreaId") Long serviceAreaId,
-                                          @Param("serviceCategoryId") Long serviceCategoryId);
+    List<Provider> findEligibleProviders(
+            @Param("serviceAreaId") Long serviceAreaId,
+            @Param("serviceCategoryId") Long serviceCategoryId
+    );
 }
