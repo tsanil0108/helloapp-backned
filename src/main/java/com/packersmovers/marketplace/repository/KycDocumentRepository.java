@@ -6,6 +6,12 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 
 public interface KycDocumentRepository extends JpaRepository<KycDocument, Long> {
+
+    List<KycDocument> findByProviderIdOrderByCreatedAtDesc(Long providerId);
+
     List<KycDocument> findByProviderId(Long providerId);
+
     boolean existsByProviderId(Long providerId);
+
+    long countByProviderId(Long providerId);
 }

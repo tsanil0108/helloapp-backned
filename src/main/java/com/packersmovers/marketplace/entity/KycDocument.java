@@ -2,29 +2,17 @@ package com.packersmovers.marketplace.entity;
 
 import com.packersmovers.marketplace.common.enums.KycDocType;
 import com.packersmovers.marketplace.common.util.BaseEntity;
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.FetchType;
-import jakarta.persistence.JoinColumn;
-import jakarta.persistence.ManyToOne;
-import jakarta.persistence.Table;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.EqualsAndHashCode;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
 
-@Getter
-@Setter
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-@EqualsAndHashCode(callSuper = false)
+import jakarta.persistence.*;
+import lombok.*;
+
 @Entity
 @Table(name = "kyc_documents")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class KycDocument extends BaseEntity {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
@@ -32,15 +20,16 @@ public class KycDocument extends BaseEntity {
     private Provider provider;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 30)
+    @Column(name = "doc_type", nullable = false)
     private KycDocType docType;
 
-    @Column(nullable = false, length = 500)
+    @Column(name = "doc_url", nullable = false, length = 1000)
     private String docUrl;
 
+    @Column(name = "verified", nullable = false)
     @Builder.Default
-    @Column(nullable = false)
     private boolean verified = false;
 
+    @Column(name = "remarks", length = 1000)
     private String remarks;
 }

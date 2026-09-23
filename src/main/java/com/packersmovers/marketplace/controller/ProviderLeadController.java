@@ -17,44 +17,99 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * The provider's lead funnel: masked "New Leads" inbox -> view -> paid unlock -> unmasked
- * "My Leads" with contact tracking. See sections 8-10 of the architecture doc.
+ * The provider's lead funnel:
+ * masked "New Leads" inbox -> view -> paid unlock ->
+ * unmasked "My Leads" with contact tracking.
+ *
+ * See sections 8-10 of the architecture doc.
  */
 @RestController
 @RequestMapping("/api/provider/leads")
 @RequiredArgsConstructor
-@Tag(name = "Provider Leads", description = "New-lead inbox, unlock, and post-unlock lead tracking")
+@Tag(
+        name = "Provider Leads",
+        description = "New-lead inbox, unlock, and post-unlock lead tracking"
+)
 public class ProviderLeadController {
 
     private final ProviderService providerService;
 
+    /**
+     * Get new/masked leads available for the provider.
+     */
     @GetMapping("/new")
-    public ApiResponse<List<LeadCardResponse>> newLeads(@AuthenticationPrincipal CustomUserPrincipal principal) {
-        return ApiResponse.success(providerService.listNewLeads(principal.getUserId()));
+    public ApiResponse<List<LeadCardResponse>> newLeads(
+            @AuthenticationPrincipal CustomUserPrincipal principal
+    ) {
+        return ApiResponse.success(
+                providerService.listNewLeads(principal.getUserId())
+        );
     }
 
+    /**
+     * View a masked lead before unlocking.
+     */
     @PostMapping("/{assignmentId}/view")
-    public ApiResponse<LeadCardResponse> view(@AuthenticationPrincipal CustomUserPrincipal principal,
-                                               @PathVariable Long assignmentId) {
-        return ApiResponse.success(providerService.viewLead(principal.getUserId(), assignmentId));
+    public ApiResponse<LeadCardResponse> view(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable Long assignmentId
+    ) {
+        return ApiResponse.success(
+                providerService.viewLead(
+                        principal.getUserId(),
+                        assignmentId
+                )
+        );
     }
 
+    /**
+     * Unlock a lead.
+     * Successful unlock reveals customer contact details.
+     */
     @PostMapping("/{assignmentId}/unlock")
-    public ApiResponse<LeadDetailForProviderResponse> unlock(@AuthenticationPrincipal CustomUserPrincipal principal,
-                                                              @PathVariable Long assignmentId) {
-        return ApiResponse.success("Lead unlocked - contact details revealed",
-                providerService.unlockLead(principal.getUserId(), assignmentId));
+    public ApiResponse<LeadDetailForProviderResponse> unlock(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable Long assignmentId
+    ) {
+        return ApiResponse.success(
+                "Lead unlocked - contact details revealed",
+                providerService.unlockLead(
+                        principal.getUserId(),
+                        assignmentId
+                )
+        );
     }
 
+    /**
+     * Get all leads unlocked by this provider.
+     */
     @GetMapping("/my")
-    public ApiResponse<List<LeadDetailForProviderResponse>> myLeads(@AuthenticationPrincipal CustomUserPrincipal principal) {
-        return ApiResponse.success(providerService.myLeads(principal.getUserId()));
+    public ApiResponse<List<LeadDetailForProviderResponse>> myLeads(
+            @AuthenticationPrincipal CustomUserPrincipal principal
+    ) {
+        return ApiResponse.success(
+                providerService.listMyLeads(
+                        principal.getUserId()
+                )
+        );
     }
 
+    /**
+     * Mark/log that the provider contacted the customer.
+     */
     @PostMapping("/{assignmentId}/contact")
-    public ApiResponse<Void> logContact(@AuthenticationPrincipal CustomUserPrincipal principal,
-                                         @PathVariable Long assignmentId) {
-        providerService.logContact(principal.getUserId(), assignmentId);
-        return ApiResponse.success("Contact logged", null);
+    public ApiResponse<Void> logContact(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable Long assignmentId
+    ) {
+        providerService.markContacted(
+                principal.getUserId(),
+                assignmentId
+        );
+
+        return ApiResponse.success(
+                "Contact logged",
+                null
+        );
     }
 }
