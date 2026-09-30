@@ -2,6 +2,8 @@ package com.packersmovers.marketplace.repository;
 
 import com.packersmovers.marketplace.common.enums.AssignmentStatus;
 import com.packersmovers.marketplace.entity.LeadAssignment;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -10,25 +12,101 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
-public interface LeadAssignmentRepository extends JpaRepository<LeadAssignment, Long> {
+public interface LeadAssignmentRepository
+        extends JpaRepository<LeadAssignment, Long> {
 
-    List<LeadAssignment> findByLeadId(Long leadId);
+    // ============================================================
+    // LEAD
+    // ============================================================
 
-    List<LeadAssignment> findByProviderIdOrderByCreatedAtDesc(Long providerId);
+    List<LeadAssignment> findByLeadId(
+            Long leadId
+    );
 
-    List<LeadAssignment> findByProviderIdAndStatusInOrderByCreatedAtDesc(Long providerId, List<AssignmentStatus> statuses);
+    Optional<LeadAssignment> findByLeadIdAndProviderId(
+            Long leadId,
+            Long providerId
+    );
 
-    Optional<LeadAssignment> findByLeadIdAndProviderId(Long leadId, Long providerId);
+    long countByLeadIdAndStatusIn(
+            Long leadId,
+            List<AssignmentStatus> statuses
+    );
 
-    long countByLeadIdAndStatusIn(Long leadId, List<AssignmentStatus> statuses);
 
-    long countByStatusAndUnlockedAtBetween(AssignmentStatus status, Instant start, Instant end);
+    // ============================================================
+    // PROVIDER LEADS
+    // ============================================================
+
+    List<LeadAssignment>
+    findByProviderIdAndStatusInOrderByCreatedAtDesc(
+            Long providerId,
+            List<AssignmentStatus> statuses
+    );
+
+    List<LeadAssignment>
+    findByProviderIdOrderByCreatedAtDesc(
+            Long providerId
+    );
+
+    List<LeadAssignment>
+    findByProviderIdAndStatusOrderByCreatedAtDesc(
+            Long providerId,
+            AssignmentStatus status
+    );
+
+
+    // ============================================================
+    // PROVIDER STATISTICS
+    // ============================================================
+
+    long countByProviderId(
+            Long providerId
+    );
+
+    long countByProviderIdAndStatus(
+            Long providerId,
+            AssignmentStatus status
+    );
+
+
+    // ============================================================
+    // ADMIN / DASHBOARD
+    // ============================================================
+
+    long countByStatusAndUnlockedAtBetween(
+            AssignmentStatus status,
+            Instant start,
+            Instant end
+    );
+
+
+    // ============================================================
+    // ADMIN PROVIDER LEAD HISTORY
+    // ============================================================
+
+    Page<LeadAssignment> findByProviderIdOrderByCreatedAtDesc(
+            Long providerId,
+            Pageable pageable
+    );
+
+
+    // ============================================================
+    // EXPLICIT PROVIDER + STATUS QUERY
+    // ============================================================
 
     @Query("""
-           select a from LeadAssignment a
-           where a.provider.id = :providerId and a.status = :status
-           order by a.createdAt desc
-           """)
-    List<LeadAssignment> findByProviderAndStatus(@Param("providerId") Long providerId,
-                                                  @Param("status") AssignmentStatus status);
+            SELECT a
+            FROM LeadAssignment a
+            WHERE a.provider.id = :providerId
+              AND a.status = :status
+            ORDER BY a.createdAt DESC
+            """)
+    List<LeadAssignment> findByProviderAndStatus(
+            @Param("providerId")
+            Long providerId,
+
+            @Param("status")
+            AssignmentStatus status
+    );
 }

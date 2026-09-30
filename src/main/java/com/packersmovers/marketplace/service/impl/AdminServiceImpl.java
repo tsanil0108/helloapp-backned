@@ -8,11 +8,14 @@ import com.packersmovers.marketplace.common.exception.BadRequestException;
 import com.packersmovers.marketplace.common.exception.ResourceNotFoundException;
 import com.packersmovers.marketplace.dto.admin.AuditLogResponse;
 import com.packersmovers.marketplace.dto.admin.DashboardStatsResponse;
+import com.packersmovers.marketplace.dto.admin.ProviderLeadHistoryResponse;
+import com.packersmovers.marketplace.dto.admin.ProviderPerformanceResponse;
 import com.packersmovers.marketplace.dto.admin.SettingResponse;
 import com.packersmovers.marketplace.dto.admin.SettingUpdateRequest;
 import com.packersmovers.marketplace.dto.common.PageResponse;
 import com.packersmovers.marketplace.dto.provider.ProviderApprovalRequest;
 import com.packersmovers.marketplace.dto.provider.ProviderProfileResponse;
+import com.packersmovers.marketplace.entity.LeadAssignment;
 import com.packersmovers.marketplace.entity.Provider;
 import com.packersmovers.marketplace.entity.SettingConfig;
 import com.packersmovers.marketplace.entity.User;
@@ -35,6 +38,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -141,12 +145,8 @@ public class AdminServiceImpl implements AdminService {
      *   provider.serviceAreas
      *   provider.serviceCategories
      *
-     * listProviders() previously ran without a transaction.
-     * toProfile() then accessed those lazy relationships after
-     * the Hibernate session had already closed.
-     *
-     * Keeping the complete provider mapping inside a read-only
-     * transaction prevents LazyInitializationException.
+     * listProviders() runs inside a transaction so the mapper
+     * can safely access those lazy relationships.
      */
 
     @Override
@@ -391,6 +391,357 @@ public class AdminServiceImpl implements AdminService {
 
 
     // ============================================================
+    // PROVIDER PERFORMANCE
+    // ============================================================
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProviderPerformanceResponse getProviderPerformance(
+            Long providerId
+    ) {
+
+        Provider provider =
+                providerRepository.findById(providerId)
+                        .orElseThrow(
+                                () -> ResourceNotFoundException.of(
+                                        "Provider",
+                                        providerId
+                                )
+                        );
+
+        long assigned =
+                leadAssignmentRepository
+                        .countByProviderId(providerId);
+
+        long viewed =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.VIEWED
+                        );
+
+        long unlocked =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.UNLOCKED
+                        );
+
+        long contacted =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.CONTACTED
+                        );
+
+        long quoteSent =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.QUOTE_SENT
+                        );
+
+        long negotiation =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.NEGOTIATION
+                        );
+
+        long booked =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.BOOKED
+                        );
+
+        long serviceInProgress =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.SERVICE_IN_PROGRESS
+                        );
+
+        long completed =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.COMPLETED
+                        );
+
+        long lost =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.LOST
+                        );
+
+        long expired =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.EXPIRED
+                        );
+
+        long cancelled =
+                leadAssignmentRepository
+                        .countByProviderIdAndStatus(
+                                providerId,
+                                AssignmentStatus.CANCELLED
+                        );
+
+        /*
+         * Calculate unlock spend and contact attempts from the
+         * provider's assignment history.
+         */
+        List<LeadAssignment> assignments =
+                leadAssignmentRepository
+                        .findByProviderIdOrderByCreatedAtDesc(
+                                providerId
+                        );
+
+        BigDecimal totalUnlockSpend =
+                assignments.stream()
+                        .map(LeadAssignment::getUnlockFeeCharged)
+                        .filter(value -> value != null)
+                        .reduce(
+                                BigDecimal.ZERO,
+                                BigDecimal::add
+                        );
+
+        long totalContactAttempts =
+                assignments.stream()
+                        .mapToLong(
+                                assignment ->
+                                        assignment.getContactAttemptCount() != null
+                                                ? assignment.getContactAttemptCount()
+                                                : 0L
+                        )
+                        .sum();
+
+        double bookingRate =
+                percentage(booked, unlocked);
+
+        double completionRate =
+                percentage(completed, booked);
+
+        return ProviderPerformanceResponse.builder()
+                .providerId(provider.getId())
+                .companyName(provider.getCompanyName())
+                .ownerName(provider.getOwnerName())
+                .email(provider.getUser().getEmail())
+                .mobile(provider.getUser().getMobile())
+                .status(
+                        provider.getStatus() != null
+                                ? provider.getStatus().name()
+                                : null
+                )
+                .assigned(assigned)
+                .viewed(viewed)
+                .unlocked(unlocked)
+                .contacted(contacted)
+                .quoteSent(quoteSent)
+                .negotiation(negotiation)
+                .booked(booked)
+                .serviceInProgress(serviceInProgress)
+                .completed(completed)
+                .lost(lost)
+                .expired(expired)
+                .cancelled(cancelled)
+                .totalUnlockSpend(totalUnlockSpend)
+                .totalContactAttempts(totalContactAttempts)
+                .bookingRate(bookingRate)
+                .completionRate(completionRate)
+                .build();
+    }
+
+
+    // ============================================================
+    // PROVIDER LEAD HISTORY
+    // ============================================================
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<ProviderLeadHistoryResponse> getProviderLeadHistory(
+            Long providerId,
+            int page,
+            int size
+    ) {
+
+        /*
+         * Make sure provider exists before querying assignments.
+         */
+        providerRepository.findById(providerId)
+                .orElseThrow(
+                        () -> ResourceNotFoundException.of(
+                                "Provider",
+                                providerId
+                        )
+                );
+
+        int safePage =
+                Math.max(page, 0);
+
+        int safeSize =
+                Math.min(
+                        Math.max(size, 1),
+                        100
+                );
+
+        var pageable =
+                PageRequest.of(
+                        safePage,
+                        safeSize,
+                        Sort.by(
+                                Sort.Direction.DESC,
+                                "createdAt"
+                        )
+                );
+
+        var result =
+                leadAssignmentRepository
+                        .findByProviderIdOrderByCreatedAtDesc(
+                                providerId,
+                                pageable
+                        )
+                        .map(this::toProviderLeadHistory);
+
+        return PageResponse.from(result);
+    }
+
+
+    // ============================================================
+    // PROVIDER LEAD HISTORY MAPPER
+    // ============================================================
+
+    private ProviderLeadHistoryResponse toProviderLeadHistory(
+            LeadAssignment assignment
+    ) {
+
+        var lead =
+                assignment.getLead();
+
+        return ProviderLeadHistoryResponse.builder()
+                .leadAssignmentId(
+                        assignment.getId()
+                )
+                .leadId(
+                        lead != null
+                                ? lead.getId()
+                                : null
+                )
+                .leadCode(
+                        lead != null
+                                ? lead.getLeadCode()
+                                : null
+                )
+                .customerName(
+                        lead != null
+                                ? lead.getCustomerName()
+                                : null
+                )
+                .customerMobile(
+                        lead != null
+                                ? lead.getCustomerMobile()
+                                : null
+                )
+                .pickupLocation(
+                        lead != null
+                                ? lead.getPickupLocation()
+                                : null
+                )
+                .dropLocation(
+                        lead != null
+                                ? lead.getDropLocation()
+                                : null
+                )
+                .serviceCategory(
+                        lead != null && lead.getServiceCategory() != null
+                                ? lead.getServiceCategory().getName()
+                                : null
+                )
+                .propertyType(
+                        lead != null
+                                ? lead.getPropertyType()
+                                : null
+                )
+                .status(
+                        assignment.getStatus()
+                )
+                .unlockFeeCharged(
+                        assignment.getUnlockFeeCharged()
+                )
+                .createdAt(
+                        assignment.getCreatedAt()
+                )
+                .viewedAt(
+                        assignment.getViewedAt()
+                )
+                .unlockedAt(
+                        assignment.getUnlockedAt()
+                )
+                .contactedAt(
+                        assignment.getContactedAt()
+                )
+                .contactMethod(
+                        assignment.getContactMethod()
+                )
+                .contactAttemptCount(
+                        assignment.getContactAttemptCount()
+                )
+                .quoteSentAt(
+                        assignment.getQuoteSentAt()
+                )
+                .bookedAt(
+                        assignment.getBookedAt()
+                )
+                .serviceStartedAt(
+                        assignment.getServiceStartedAt()
+                )
+                .completedAt(
+                        assignment.getCompletedAt()
+                )
+                .lostAt(
+                        assignment.getLostAt()
+                )
+                .lostReason(
+                        assignment.getLostReason()
+                )
+                .completionNotes(
+                        assignment.getCompletionNotes()
+                )
+                .updatedAt(
+                        assignment.getUpdatedAt()
+                )
+                .build();
+    }
+
+
+    // ============================================================
+    // PERCENTAGE HELPER
+    // ============================================================
+
+    private double percentage(
+            long numerator,
+            long denominator
+    ) {
+
+        if (denominator <= 0) {
+            return 0.0;
+        }
+
+        return BigDecimal.valueOf(numerator)
+                .multiply(BigDecimal.valueOf(100))
+                .divide(
+                        BigDecimal.valueOf(denominator),
+                        2,
+                        RoundingMode.HALF_UP
+                )
+                .doubleValue();
+    }
+
+
+    // ============================================================
     // SETTINGS
     // ============================================================
 
@@ -442,15 +793,12 @@ public class AdminServiceImpl implements AdminService {
                                         .build()
                         );
 
-
         String oldValue =
                 setting.getSettingValue();
-
 
         setting.setSettingValue(
                 request.getSettingValue()
         );
-
 
         if (request.getDescription() != null) {
 
@@ -459,12 +807,10 @@ public class AdminServiceImpl implements AdminService {
             );
         }
 
-
         setting =
                 settingConfigRepository.save(
                         setting
                 );
-
 
         auditService.log(
                 "SETTING_UPDATED",
@@ -474,7 +820,6 @@ public class AdminServiceImpl implements AdminService {
                 setting.getSettingValue(),
                 setting.getSettingKey()
         );
-
 
         return SettingResponse.builder()
                 .id(setting.getId())
@@ -511,7 +856,6 @@ public class AdminServiceImpl implements AdminService {
                                 "createdAt"
                         )
                 );
-
 
         var result =
                 auditLogRepository
@@ -555,7 +899,6 @@ public class AdminServiceImpl implements AdminService {
                                                 .build()
                         );
 
-
         return PageResponse.from(result);
     }
 
@@ -568,73 +911,48 @@ public class AdminServiceImpl implements AdminService {
             Provider provider
     ) {
 
-        /*
-         * This method is intentionally called from methods that
-         * have an active transaction.
-         *
-         * Therefore Hibernate can safely initialize:
-         *
-         * provider.getUser()
-         * provider.getServiceAreas()
-         * provider.getServiceCategories()
-         */
-
         var wallet =
                 walletService.getWallet(
                         provider.getId()
                 );
 
-
         return ProviderProfileResponse.builder()
-
                 .id(
                         provider.getId()
                 )
-
                 .companyName(
                         provider.getCompanyName()
                 )
-
                 .ownerName(
                         provider.getOwnerName()
                 )
-
                 .email(
                         provider.getUser().getEmail()
                 )
-
                 .mobile(
                         provider.getUser().getMobile()
                 )
-
                 .gstNumber(
                         provider.getGstNumber()
                 )
-
                 .panNumber(
                         provider.getPanNumber()
                 )
-
                 .status(
                         provider.getStatus()
                 )
-
                 .verifiedBadge(
                         provider.isVerifiedBadge()
                 )
-
                 .rating(
                         provider.getRating()
                 )
-
                 .reviewCount(
                         provider.getReviewCount()
                 )
-
                 .walletBalance(
                         wallet.getBalance()
                 )
-
                 .serviceAreas(
                         provider.getServiceAreas()
                                 .stream()
@@ -643,7 +961,6 @@ public class AdminServiceImpl implements AdminService {
                                 )
                                 .toList()
                 )
-
                 .serviceCategories(
                         provider.getServiceCategories()
                                 .stream()
@@ -652,11 +969,9 @@ public class AdminServiceImpl implements AdminService {
                                 )
                                 .toList()
                 )
-
                 .approvedAt(
                         provider.getApprovedAt()
                 )
-
                 .build();
     }
 }

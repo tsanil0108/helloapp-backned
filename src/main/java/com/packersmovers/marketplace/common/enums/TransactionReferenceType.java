@@ -5,5 +5,6 @@ public enum TransactionReferenceType {
     LEAD_UNLOCK,
     REFUND,
     SUBSCRIPTION_PURCHASE,
-    ADMIN_ADJUSTMENT
+    ADMIN_ADJUSTMENT,
+    COUPON
 }

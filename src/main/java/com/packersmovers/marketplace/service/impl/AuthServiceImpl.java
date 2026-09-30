@@ -33,6 +33,7 @@ import com.packersmovers.marketplace.security.JwtProperties;
 import com.packersmovers.marketplace.security.JwtTokenProvider;
 import com.packersmovers.marketplace.service.AuditService;
 import com.packersmovers.marketplace.service.AuthService;
+import com.packersmovers.marketplace.service.CouponService;
 import com.packersmovers.marketplace.service.NotificationService;
 import com.packersmovers.marketplace.service.PasswordResetDeliveryService;
 import lombok.RequiredArgsConstructor;
@@ -88,7 +89,16 @@ public class AuthServiceImpl implements AuthService {
 
     private final NotificationService notificationService;
 
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    /*
+     * Coupon service.
+     *
+     * Provider registration uses this service to validate
+     * and redeem an optional welcome coupon.
+     */
+    private final CouponService couponService;
+
+    private static final SecureRandom SECURE_RANDOM =
+            new SecureRandom();
 
     private static final long RESET_TOKEN_EXPIRY_MINUTES = 30;
 
@@ -118,7 +128,8 @@ public class AuthServiceImpl implements AuthService {
             );
         }
 
-        String identifier = request.getIdentifier().trim();
+        String identifier =
+                request.getIdentifier().trim();
 
         UsernamePasswordAuthenticationToken authToken =
                 new UsernamePasswordAuthenticationToken(
@@ -310,12 +321,10 @@ public class AuthServiceImpl implements AuthService {
 
         List<RefreshTokenSession> sessions =
                 refreshTokenSessionRepository
-                        .findByUserIdAndRevokedAtIsNull(userId);
+                        .findByUserIdAndRevokedAtIsNull(
+                                userId
+                        );
 
-        /*
-         * No lambda here.
-         * This avoids effectively-final problems.
-         */
         for (RefreshTokenSession session : sessions) {
 
             session.setRevokedAt(now);
@@ -608,7 +617,9 @@ public class AuthServiceImpl implements AuthService {
 
         List<RefreshTokenSession> sessions =
                 refreshTokenSessionRepository
-                        .findByUserIdAndRevokedAtIsNull(userId);
+                        .findByUserIdAndRevokedAtIsNull(
+                                userId
+                        );
 
         for (RefreshTokenSession session : sessions) {
 
@@ -710,10 +721,7 @@ public class AuthServiceImpl implements AuthService {
         user = userRepository.save(user);
 
         /*
-         * IMPORTANT:
          * Create final reference after save.
-         * This prevents effectively-final issues if
-         * user is used inside a lambda anywhere later.
          */
         final User savedUser = user;
 
@@ -778,6 +786,35 @@ public class AuthServiceImpl implements AuthService {
                         .balance(BigDecimal.ZERO)
                         .build()
         );
+
+        /*
+         * ========================================================
+         * WELCOME COUPON
+         * ========================================================
+         *
+         * Coupon is optional.
+         *
+         * If provider supplied a coupon code:
+         *
+         * 1. Coupon is locked.
+         * 2. Coupon is validated.
+         * 3. Provider wallet is credited.
+         * 4. Redemption is recorded.
+         * 5. Coupon usage count is incremented.
+         *
+         * Everything is inside this same transaction.
+         *
+         * Therefore, if coupon redemption fails,
+         * provider registration also rolls back.
+         */
+        if (request.getCouponCode() != null
+                && !request.getCouponCode().isBlank()) {
+
+            couponService.redeemCoupon(
+                    request.getCouponCode(),
+                    savedProvider.getId()
+            );
+        }
 
         auditService.log(
                 "PROVIDER_REGISTERED",
@@ -874,10 +911,7 @@ public class AuthServiceImpl implements AuthService {
         admin = userRepository.save(admin);
 
         /*
-         * THIS IS THE FIX FOR:
-         *
-         * local variables referenced from a lambda expression
-         * must be final or effectively final
+         * Prevent effectively-final lambda issues.
          */
         final User savedAdmin = admin;
 

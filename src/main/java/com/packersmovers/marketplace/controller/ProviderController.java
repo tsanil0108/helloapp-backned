@@ -3,6 +3,9 @@ package com.packersmovers.marketplace.controller;
 import com.packersmovers.marketplace.common.enums.KycDocType;
 import com.packersmovers.marketplace.common.response.ApiResponse;
 import com.packersmovers.marketplace.dto.common.PageResponse;
+import com.packersmovers.marketplace.dto.lead.LeadAssignmentHistoryResponse;
+import com.packersmovers.marketplace.dto.lead.LeadAssignmentStatusRequest;
+import com.packersmovers.marketplace.dto.lead.ProviderLeadStatsResponse;
 import com.packersmovers.marketplace.dto.payment.PaymentVerifyRequest;
 import com.packersmovers.marketplace.dto.payment.RazorpayOrderResponse;
 import com.packersmovers.marketplace.dto.provider.KycUploadRequest;
@@ -10,7 +13,9 @@ import com.packersmovers.marketplace.dto.provider.ProviderProfileResponse;
 import com.packersmovers.marketplace.dto.wallet.AddMoneyRequest;
 import com.packersmovers.marketplace.dto.wallet.WalletResponse;
 import com.packersmovers.marketplace.dto.wallet.WalletTransactionResponse;
+import com.packersmovers.marketplace.entity.Coupon;
 import com.packersmovers.marketplace.security.CustomUserPrincipal;
+import com.packersmovers.marketplace.service.CouponService;
 import com.packersmovers.marketplace.service.PaymentService;
 import com.packersmovers.marketplace.service.ProviderService;
 import com.packersmovers.marketplace.service.WalletService;
@@ -19,15 +24,11 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestPart;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.util.List;
+import java.util.Map;
 
 /**
  * Provider's own account:
@@ -35,20 +36,26 @@ import org.springframework.web.multipart.MultipartFile;
  * - Profile
  * - KYC document upload
  * - Wallet
+ * - Wallet transactions
+ * - Coupon redemption
  * - Razorpay top-up
+ * - Lead lifecycle
+ * - Lead statistics
+ * - Lead history
  */
 @RestController
 @RequestMapping("/api/provider")
 @RequiredArgsConstructor
 @Tag(
         name = "Provider Account",
-        description = "Profile, KYC and wallet for the logged-in provider"
+        description = "Profile, KYC, wallet and lead management for the logged-in provider"
 )
 public class ProviderController {
 
     private final ProviderService providerService;
     private final WalletService walletService;
     private final PaymentService paymentService;
+    private final CouponService couponService;
 
 
     // ============================================================
@@ -86,39 +93,30 @@ public class ProviderController {
             MultipartFile file
     ) {
 
-        /*
-         * Convert the document type received from the mobile app
-         * into the backend KycDocType enum.
-         *
-         * Example:
-         * "GST_CERTIFICATE"
-         * "PAN_CARD"
-         * "AADHAAR_CARD"
-         */
         KycDocType kycDocType;
 
         try {
+
             kycDocType = KycDocType.valueOf(
                     docType.trim().toUpperCase()
             );
+
         } catch (IllegalArgumentException | NullPointerException ex) {
+
             throw new IllegalArgumentException(
                     "Invalid KYC document type: " + docType
             );
         }
 
 
-        /*
-         * Build the DTO expected by ProviderService.
-         */
-        KycUploadRequest request = new KycUploadRequest();
+        KycUploadRequest request =
+                new KycUploadRequest();
 
-        request.setDocType(kycDocType);
+        request.setDocType(
+                kycDocType
+        );
 
 
-        /*
-         * Save the uploaded file and KYC record.
-         */
         providerService.uploadKycDocument(
                 principal.getUserId(),
                 request,
@@ -193,6 +191,86 @@ public class ProviderController {
 
 
     // ============================================================
+    // COUPON REDEEM
+    // ============================================================
+
+    /**
+     * Redeem coupon for the currently authenticated provider.
+     *
+     * Endpoint:
+     *
+     * POST /api/provider/wallet/coupon/redeem
+     *
+     * Request:
+     *
+     * {
+     *     "code": "HELLO200"
+     * }
+     *
+     * Provider ID is NOT accepted from frontend.
+     * It is resolved from the authenticated JWT.
+     *
+     * CouponService handles:
+     *
+     * - Coupon validation
+     * - Active check
+     * - Expiry check
+     * - Maximum usage check
+     * - One coupon redemption per provider
+     * - Wallet credit
+     * - Wallet ledger
+     * - Coupon usage increment
+     * - Audit log
+     */
+    @PostMapping("/wallet/coupon/redeem")
+    public ApiResponse<Coupon> redeemCoupon(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+
+            @RequestBody
+            Map<String, String> request
+    ) {
+
+        if (request == null) {
+
+            throw new IllegalArgumentException(
+                    "Coupon request is required"
+            );
+        }
+
+
+        String code =
+                request.get("code");
+
+
+        if (code == null || code.isBlank()) {
+
+            throw new IllegalArgumentException(
+                    "Coupon code is required"
+            );
+        }
+
+
+        Long providerId =
+                providerService.resolveProviderId(
+                        principal.getUserId()
+                );
+
+
+        Coupon coupon =
+                couponService.redeemCoupon(
+                        code,
+                        providerId
+                );
+
+
+        return ApiResponse.success(
+                "Coupon redeemed and wallet credited successfully",
+                coupon
+        );
+    }
+
+
+    // ============================================================
     // RAZORPAY CREATE ORDER
     // ============================================================
 
@@ -246,6 +324,112 @@ public class ProviderController {
                 paymentService.verifyAndCreditTopup(
                         providerId,
                         request
+                )
+        );
+    }
+
+
+    // ============================================================
+    // LEAD STATUS UPDATE
+    // ============================================================
+
+    /**
+     * Provider updates the lifecycle of an unlocked lead.
+     *
+     * Examples:
+     *
+     * CONTACTED
+     * QUOTE_SENT
+     * NEGOTIATION
+     * BOOKED
+     * SERVICE_IN_PROGRESS
+     * COMPLETED
+     * LOST
+     */
+    @PostMapping(
+            "/leads/{assignmentId}/status"
+    )
+    public ApiResponse<Void> updateLeadStatus(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+
+            @PathVariable
+            Long assignmentId,
+
+            @Valid
+            @RequestBody
+            LeadAssignmentStatusRequest request
+    ) {
+
+        providerService.updateLeadAssignmentStatus(
+                principal.getUserId(),
+                assignmentId,
+                request
+        );
+
+
+        return ApiResponse.success(
+                "Lead status updated successfully",
+                null
+        );
+    }
+
+
+    // ============================================================
+    // LEAD STATISTICS
+    // ============================================================
+
+    /**
+     * Provider performance summary.
+     *
+     * Shows:
+     *
+     * - Assigned
+     * - Viewed
+     * - Unlocked
+     * - Contacted
+     * - Quote sent
+     * - Negotiation
+     * - Booked
+     * - Service in progress
+     * - Completed
+     * - Lost
+     * - Expired
+     * - Cancelled
+     */
+    @GetMapping("/leads/stats")
+    public ApiResponse<ProviderLeadStatsResponse> getLeadStats(
+            @AuthenticationPrincipal CustomUserPrincipal principal
+    ) {
+
+        return ApiResponse.success(
+                "Lead statistics fetched successfully",
+                providerService.getMyLeadStats(
+                        principal.getUserId()
+                )
+        );
+    }
+
+
+    // ============================================================
+    // COMPLETE LEAD HISTORY
+    // ============================================================
+
+    /**
+     * Returns the provider's complete lead assignment history.
+     *
+     * This is intentionally provider-scoped.
+     * Provider ID is resolved from the JWT.
+     */
+    @GetMapping("/leads/history")
+    public ApiResponse<List<LeadAssignmentHistoryResponse>>
+    getLeadHistory(
+            @AuthenticationPrincipal CustomUserPrincipal principal
+    ) {
+
+        return ApiResponse.success(
+                "Lead history fetched successfully",
+                providerService.listMyLeadHistory(
+                        principal.getUserId()
                 )
         );
     }

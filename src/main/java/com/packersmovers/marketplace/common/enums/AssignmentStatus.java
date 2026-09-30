@@ -1,10 +1,34 @@
 package com.packersmovers.marketplace.common.enums;
 
-/** Status of a single lead-to-provider offer (LeadAssignment row). */
 public enum AssignmentStatus {
+
     OFFERED,
     VIEWED,
+
     UNLOCKED,
-    SKIPPED,
-    EXPIRED
+    CONTACTED,
+
+    QUOTE_SENT,
+    NEGOTIATION,
+
+    BOOKED,
+    SERVICE_IN_PROGRESS,
+    COMPLETED,
+
+    LOST,
+    INVALID,
+    DUPLICATE,
+    EXPIRED,
+    CANCELLED,
+    REFUNDED;
+
+    public boolean isTerminal() {
+        return this == COMPLETED
+                || this == LOST
+                || this == INVALID
+                || this == DUPLICATE
+                || this == EXPIRED
+                || this == CANCELLED
+                || this == REFUNDED;
+    }
 }

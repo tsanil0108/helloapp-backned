@@ -8,7 +8,6 @@ import com.packersmovers.marketplace.repository.NotificationRepository;
 import com.packersmovers.marketplace.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -16,8 +15,12 @@ import java.time.Instant;
 /**
  * Persists an in-app notification record and, when the corresponding provider toggle is on
  * (app.notifications.*). In-app notifications are persisted immediately.
- * External push/SMS/WhatsApp channels remain provider adapters and must be wired to real credentials
- * before those channels are marked as delivered.
+ *
+ * External push/SMS/WhatsApp channels remain provider adapters and must be wired to real
+ * credentials before those channels are marked as delivered.
+ *
+ * Notifications are intentionally persisted synchronously so that the notification record
+ * participates in the caller's transaction and does not race with entity creation/updates.
  */
 @Slf4j
 @Service
@@ -28,8 +31,13 @@ public class NotificationServiceImpl implements NotificationService {
     private final NotificationProperties notificationProperties;
 
     @Override
-    @Async
-    public void notify(User user, String title, String message, NotificationChannel channel, String relatedEntity) {
+    public void notify(
+            User user,
+            String title,
+            String message,
+            NotificationChannel channel,
+            String relatedEntity
+    ) {
         Notification notification = Notification.builder()
                 .user(user)
                 .title(title)
@@ -37,16 +45,28 @@ public class NotificationServiceImpl implements NotificationService {
                 .channel(channel)
                 .relatedEntity(relatedEntity)
                 .sentAt(Instant.now())
-                .deliveryStatus(isChannelEnabled(channel) ? "PERSISTED_PENDING_DISPATCH" : "SKIPPED_DISABLED")
+                .deliveryStatus(
+                        isChannelEnabled(channel)
+                                ? "PERSISTED_PENDING_DISPATCH"
+                                : "SKIPPED_DISABLED"
+                )
                 .build();
+
         notificationRepository.save(notification);
 
         if (isChannelEnabled(channel)) {
             // External provider adapters must be configured before this can be marked delivered.
-            log.info("Notification persisted for user={} channel={} title='{}'",
-                    user != null ? user.getId() : "n/a", channel, title);
+            log.info(
+                    "Notification persisted for user={} channel={} title='{}'",
+                    user != null ? user.getId() : "n/a",
+                    channel,
+                    title
+            );
         } else {
-            log.debug("Notification channel {} disabled - recorded only.", channel);
+            log.debug(
+                    "Notification channel {} disabled - recorded only.",
+                    channel
+            );
         }
     }
 

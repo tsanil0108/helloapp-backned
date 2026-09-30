@@ -6,8 +6,11 @@ import com.packersmovers.marketplace.common.enums.ProviderStatus;
 import com.packersmovers.marketplace.common.exception.BadRequestException;
 import com.packersmovers.marketplace.common.exception.ResourceNotFoundException;
 import com.packersmovers.marketplace.common.exception.UnauthorizedActionException;
+import com.packersmovers.marketplace.dto.lead.LeadAssignmentHistoryResponse;
+import com.packersmovers.marketplace.dto.lead.LeadAssignmentStatusRequest;
 import com.packersmovers.marketplace.dto.lead.LeadCardResponse;
 import com.packersmovers.marketplace.dto.lead.LeadDetailForProviderResponse;
+import com.packersmovers.marketplace.dto.lead.ProviderLeadStatsResponse;
 import com.packersmovers.marketplace.dto.provider.KycUploadRequest;
 import com.packersmovers.marketplace.dto.provider.ProviderProfileResponse;
 import com.packersmovers.marketplace.entity.KycDocument;
@@ -236,10 +239,8 @@ public class ProviderServiceImpl implements ProviderService {
             );
         }
 
-
         String lowerName =
                 originalName.toLowerCase();
-
 
         boolean isPdf =
                 lowerName.endsWith(".pdf");
@@ -250,7 +251,6 @@ public class ProviderServiceImpl implements ProviderService {
 
         boolean isPng =
                 lowerName.endsWith(".png");
-
 
         if (!isPdf
                 && !isJpg
@@ -305,7 +305,6 @@ public class ProviderServiceImpl implements ProviderService {
                                 + provider.getId()
                 );
 
-
         try {
 
             Files.createDirectories(
@@ -321,7 +320,6 @@ public class ProviderServiceImpl implements ProviderService {
                     directory.resolve(
                             generatedName
                     );
-
 
             Files.copy(
                     file.getInputStream(),
@@ -529,7 +527,19 @@ public class ProviderServiceImpl implements ProviderService {
 
 
         if (assignment.getStatus()
-                == AssignmentStatus.UNLOCKED) {
+                == AssignmentStatus.UNLOCKED
+                || assignment.getStatus()
+                == AssignmentStatus.CONTACTED
+                || assignment.getStatus()
+                == AssignmentStatus.QUOTE_SENT
+                || assignment.getStatus()
+                == AssignmentStatus.NEGOTIATION
+                || assignment.getStatus()
+                == AssignmentStatus.BOOKED
+                || assignment.getStatus()
+                == AssignmentStatus.SERVICE_IN_PROGRESS
+                || assignment.getStatus()
+                == AssignmentStatus.COMPLETED) {
 
             return toDetail(
                     assignment
@@ -659,16 +669,23 @@ public class ProviderServiceImpl implements ProviderService {
                 resolveProvider(userId);
 
         return leadAssignmentRepository
-                .findByProviderIdAndStatusInOrderByCreatedAtDesc(
-                        provider.getId(),
-                        List.of(
-                                AssignmentStatus.UNLOCKED
-                        )
+                .findByProviderIdOrderByCreatedAtDesc(
+                        provider.getId()
                 )
                 .stream()
+
+                // OFFERED leads belong to New Leads.
+                // My Leads contains leads that the provider
+                // has already viewed/unlocked/handled.
+                .filter(
+                        a -> a.getStatus()
+                                != AssignmentStatus.OFFERED
+                )
+
                 .map(
                         this::toDetail
                 )
+
                 .toList();
     }
 
@@ -694,8 +711,7 @@ public class ProviderServiceImpl implements ProviderService {
                 );
 
 
-        if (assignment.getStatus()
-                != AssignmentStatus.UNLOCKED) {
+        if (assignment.getUnlockedAt() == null) {
 
             throw new BadRequestException(
                     "Unlock this lead before logging a contact"
@@ -703,17 +719,54 @@ public class ProviderServiceImpl implements ProviderService {
         }
 
 
+        if (assignment.getStatus().isTerminal()) {
+
+            throw new BadRequestException(
+                    "This lead is already closed"
+            );
+        }
+
+
+        Instant now =
+                Instant.now();
+
+
         if (assignment.getContactedAt()
                 == null) {
 
             assignment.setContactedAt(
-                    Instant.now()
-            );
-
-            leadAssignmentRepository.save(
-                    assignment
+                    now
             );
         }
+
+        assignment.setLastContactedAt(
+                now
+        );
+
+
+        Integer currentAttempts =
+                assignment.getContactAttemptCount();
+
+        assignment.setContactAttemptCount(
+                currentAttempts == null
+                        ? 1
+                        : currentAttempts + 1
+        );
+
+
+        assignment.setContactMethod(
+                "CALL"
+        );
+
+
+        assignment.setStatus(
+                AssignmentStatus.CONTACTED
+        );
+
+
+        leadAssignmentRepository.save(
+                assignment
+        );
 
 
         Lead lead =
@@ -747,7 +800,473 @@ public class ProviderServiceImpl implements ProviderService {
 
                 "provider="
                         + provider.getId()
+                        + " method=CALL"
         );
+    }
+
+
+    // ============================================================
+    // COMPLETE LEAD LIFECYCLE
+    // ============================================================
+
+    @Override
+    @Transactional
+    public void updateLeadAssignmentStatus(
+            Long userId,
+            Long leadAssignmentId,
+            LeadAssignmentStatusRequest request
+    ) {
+
+        if (request == null
+                || request.getStatus() == null) {
+
+            throw new BadRequestException(
+                    "Lead status is required"
+            );
+        }
+
+
+        Provider provider =
+                resolveProvider(userId);
+
+
+        LeadAssignment assignment =
+                findOwnedAssignment(
+                        leadAssignmentId,
+                        provider
+                );
+
+
+        AssignmentStatus current =
+                assignment.getStatus();
+
+        AssignmentStatus next =
+                request.getStatus();
+
+
+        // --------------------------------------------------------
+        // OPEN / UNLOCK CHECK
+        // --------------------------------------------------------
+
+        if (current == AssignmentStatus.OFFERED
+                || current == AssignmentStatus.VIEWED) {
+
+            throw new BadRequestException(
+                    "Unlock the lead before updating its status"
+            );
+        }
+
+
+        // --------------------------------------------------------
+        // TERMINAL STATE CHECK
+        // --------------------------------------------------------
+
+        if (current.isTerminal()) {
+
+            throw new BadRequestException(
+                    "This lead is already closed with status "
+                            + current
+            );
+        }
+
+
+        Instant now =
+                Instant.now();
+
+
+        // --------------------------------------------------------
+        // STATUS TRANSITIONS
+        // --------------------------------------------------------
+
+        switch (next) {
+
+            case CONTACTED -> {
+
+                if (assignment.getUnlockedAt() == null) {
+
+                    throw new BadRequestException(
+                            "Lead must be unlocked first"
+                    );
+                }
+
+
+                if (assignment.getContactedAt() == null) {
+
+                    assignment.setContactedAt(
+                            now
+                    );
+                }
+
+
+                assignment.setLastContactedAt(
+                        now
+                );
+
+
+                Integer count =
+                        assignment.getContactAttemptCount();
+
+                assignment.setContactAttemptCount(
+                        count == null
+                                ? 1
+                                : count + 1
+                );
+
+
+                String method =
+                        request.getContactMethod();
+
+                if (method == null
+                        || method.isBlank()) {
+
+                    method = "CALL";
+                }
+
+                assignment.setContactMethod(
+                        method
+                );
+
+
+                Lead lead =
+                        assignment.getLead();
+
+                if (lead.getStatus()
+                        == LeadStatus.UNLOCKED) {
+
+                    lead.setStatus(
+                            LeadStatus.CONTACTED
+                    );
+
+                    leadRepository.save(
+                            lead
+                    );
+                }
+            }
+
+
+            case QUOTE_SENT -> {
+
+                if (assignment.getContactedAt() == null) {
+
+                    throw new BadRequestException(
+                            "Contact the customer before sending a quote"
+                    );
+                }
+
+
+                assignment.setQuoteSentAt(
+                        now
+                );
+            }
+
+
+            case NEGOTIATION -> {
+
+                if (assignment.getQuoteSentAt() == null) {
+
+                    throw new BadRequestException(
+                            "Send a quote before starting negotiation"
+                    );
+                }
+            }
+
+
+            case BOOKED -> {
+
+                if (assignment.getQuoteSentAt() == null) {
+
+                    throw new BadRequestException(
+                            "Send a quote before marking the lead booked"
+                    );
+                }
+
+
+                assignment.setBookedAt(
+                        now
+                );
+            }
+
+
+            case SERVICE_IN_PROGRESS -> {
+
+                if (assignment.getBookedAt() == null) {
+
+                    throw new BadRequestException(
+                            "Book the lead before starting service"
+                    );
+                }
+
+
+                assignment.setServiceStartedAt(
+                        now
+                );
+            }
+
+
+            case COMPLETED -> {
+
+                if (assignment.getServiceStartedAt() == null) {
+
+                    throw new BadRequestException(
+                            "Service must be started before completion"
+                    );
+                }
+
+
+                assignment.setCompletedAt(
+                        now
+                );
+
+
+                assignment.setCompletionNotes(
+                        request.getCompletionNotes()
+                );
+            }
+
+
+            case LOST -> {
+
+                if (request.getLostReason() == null
+                        || request.getLostReason().isBlank()) {
+
+                    throw new BadRequestException(
+                            "Lost reason is required"
+                    );
+                }
+
+
+                assignment.setLostAt(
+                        now
+                );
+
+
+                assignment.setLostReason(
+                        request.getLostReason()
+                );
+            }
+
+
+            case CANCELLED -> {
+
+                // Cancellation can be triggered by
+                // admin/customer workflows later.
+            }
+
+
+            case INVALID -> {
+
+                // Reserved for admin/quality-control workflows.
+            }
+
+
+            case DUPLICATE -> {
+
+                // Reserved for lead quality-control workflows.
+            }
+
+
+            case EXPIRED -> {
+
+                throw new BadRequestException(
+                        "Provider cannot manually expire a lead"
+                );
+            }
+
+
+            case REFUNDED -> {
+
+                throw new BadRequestException(
+                        "Refund status is controlled by the payment/refund workflow"
+                );
+            }
+
+
+            case OFFERED, VIEWED, UNLOCKED -> {
+
+                throw new BadRequestException(
+                        "This status is controlled by the lead assignment workflow"
+                );
+            }
+
+
+            default -> throw new BadRequestException(
+                    "Unsupported provider lead status: "
+                            + next
+            );
+        }
+
+
+        assignment.setStatus(
+                next
+        );
+
+
+        leadAssignmentRepository.save(
+                assignment
+        );
+
+
+        auditService.log(
+
+                "LEAD_STATUS_CHANGED",
+
+                "LeadAssignment",
+
+                assignment.getId(),
+
+                current.name(),
+
+                next.name(),
+
+                "provider="
+                        + provider.getId()
+        );
+    }
+
+
+    // ============================================================
+    // COMPLETE LEAD HISTORY
+    // ============================================================
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LeadAssignmentHistoryResponse> listMyLeadHistory(
+            Long userId
+    ) {
+
+        Provider provider =
+                resolveProvider(userId);
+
+
+        return leadAssignmentRepository
+                .findByProviderIdOrderByCreatedAtDesc(
+                        provider.getId()
+                )
+                .stream()
+
+                .map(
+                        this::toHistoryResponse
+                )
+
+                .toList();
+    }
+
+
+    // ============================================================
+    // PROVIDER LEAD STATISTICS
+    // ============================================================
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProviderLeadStatsResponse getMyLeadStats(
+            Long userId
+    ) {
+
+        Provider provider =
+                resolveProvider(userId);
+
+        Long providerId =
+                provider.getId();
+
+
+        return ProviderLeadStatsResponse.builder()
+
+                .assigned(
+                        leadAssignmentRepository
+                                .countByProviderId(
+                                        providerId
+                                )
+                )
+
+                .viewed(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.VIEWED
+                                )
+                )
+
+                .unlocked(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.UNLOCKED
+                                )
+                )
+
+                .contacted(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.CONTACTED
+                                )
+                )
+
+                .quoteSent(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.QUOTE_SENT
+                                )
+                )
+
+                .negotiation(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.NEGOTIATION
+                                )
+                )
+
+                .booked(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.BOOKED
+                                )
+                )
+
+                .serviceInProgress(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.SERVICE_IN_PROGRESS
+                                )
+                )
+
+                .completed(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.COMPLETED
+                                )
+                )
+
+                .lost(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.LOST
+                                )
+                )
+
+                .expired(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.EXPIRED
+                                )
+                )
+
+                .cancelled(
+                        leadAssignmentRepository
+                                .countByProviderIdAndStatus(
+                                        providerId,
+                                        AssignmentStatus.CANCELLED
+                                )
+                )
+
+                .build();
     }
 
 
@@ -762,9 +1281,10 @@ public class ProviderServiceImpl implements ProviderService {
         return providerRepository
                 .findByUserId(userId)
                 .orElseThrow(
-                        () -> new ResourceNotFoundException(
-                                "No provider profile for this account"
-                        )
+                        () ->
+                                new ResourceNotFoundException(
+                                        "No provider profile for this account"
+                                )
                 );
     }
 
@@ -837,6 +1357,10 @@ public class ProviderServiceImpl implements ProviderService {
     }
 
 
+    // ============================================================
+    // CARD RESPONSE
+    // ============================================================
+
     private LeadCardResponse toCard(
             LeadAssignment assignment
     ) {
@@ -894,6 +1418,10 @@ public class ProviderServiceImpl implements ProviderService {
                 .build();
     }
 
+
+    // ============================================================
+    // DETAIL RESPONSE
+    // ============================================================
 
     private LeadDetailForProviderResponse toDetail(
             LeadAssignment assignment
@@ -968,6 +1496,104 @@ public class ProviderServiceImpl implements ProviderService {
                 .build();
     }
 
+
+    // ============================================================
+    // HISTORY RESPONSE
+    // ============================================================
+
+    private LeadAssignmentHistoryResponse toHistoryResponse(
+            LeadAssignment assignment
+    ) {
+
+        Lead lead =
+                assignment.getLead();
+
+
+        return LeadAssignmentHistoryResponse.builder()
+
+                .leadAssignmentId(
+                        assignment.getId()
+                )
+
+                .leadId(
+                        lead.getId()
+                )
+
+                .leadCode(
+                        lead.getLeadCode()
+                )
+
+                .status(
+                        assignment.getStatus()
+                )
+
+                .unlockFeeCharged(
+                        assignment.getUnlockFeeCharged()
+                )
+
+                .viewedAt(
+                        assignment.getViewedAt()
+                )
+
+                .unlockedAt(
+                        assignment.getUnlockedAt()
+                )
+
+                .contactedAt(
+                        assignment.getContactedAt()
+                )
+
+                .contactMethod(
+                        assignment.getContactMethod()
+                )
+
+                .contactAttemptCount(
+                        assignment.getContactAttemptCount()
+                )
+
+                .quoteSentAt(
+                        assignment.getQuoteSentAt()
+                )
+
+                .bookedAt(
+                        assignment.getBookedAt()
+                )
+
+                .serviceStartedAt(
+                        assignment.getServiceStartedAt()
+                )
+
+                .completedAt(
+                        assignment.getCompletedAt()
+                )
+
+                .lostAt(
+                        assignment.getLostAt()
+                )
+
+                .lostReason(
+                        assignment.getLostReason()
+                )
+
+                .completionNotes(
+                        assignment.getCompletionNotes()
+                )
+
+                .createdAt(
+                        assignment.getCreatedAt()
+                )
+
+                .updatedAt(
+                        assignment.getUpdatedAt()
+                )
+
+                .build();
+    }
+
+
+    // ============================================================
+    // LOCATION MASKING
+    // ============================================================
 
     private String maskLocation(
             String location

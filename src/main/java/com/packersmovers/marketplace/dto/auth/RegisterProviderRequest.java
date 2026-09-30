@@ -20,15 +20,22 @@ public class RegisterProviderRequest {
     @NotBlank
     private String ownerName;
 
-    @NotBlank @Email
+    @NotBlank
+    @Email
     private String email;
 
     @NotBlank
-    @Pattern(regexp = "^[6-9]\\d{9}$", message = "Enter a valid 10-digit mobile number")
+    @Pattern(
+            regexp = "^[6-9]\\d{9}$",
+            message = "Enter a valid 10-digit mobile number"
+    )
     private String mobile;
 
     @NotBlank
-    @Size(min = 8, message = "Password must be at least 8 characters")
+    @Size(
+            min = 8,
+            message = "Password must be at least 8 characters"
+    )
     private String password;
 
     private String gstNumber;
@@ -39,4 +46,6 @@ public class RegisterProviderRequest {
 
     @NotEmpty(message = "Select at least one service category")
     private List<Long> serviceCategoryIds;
+
+    private String couponCode;
 }
